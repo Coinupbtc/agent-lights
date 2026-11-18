@@ -1,6 +1,6 @@
 # Agent Lights pill: always-on-top status dots for your AI agents - one dot per agent session running in a
 # terminal tab (Claude Code, Codex, Cursor, Grok, Hermes, ...), so two Claude tabs = two Claude dots. The agent
-# machine picks each agent's tag: its first letter, or two letters when two agents share one (Cl, Cx).
+# machine picks each agent's tag: its first letter, or two letters when two agents share one (CL, CX).
 # Left-click = bring up your terminal window (a normal local Windows Terminal with tabs) / click again
 # to tuck it away. Drag = move. Hover = which dot is what.
 # Right-click = one row per dot: Open (attach it in a new tab; a plain-tab session is moved here and
@@ -87,7 +87,7 @@ public class AgentLightsPill : Form {
 
     const int Dot = 12, DotGap = 4, LabelW = 12, GroupGap = 10, Pad = 10;
 
-    // room for an agent's tag ("C", "Cx", ...) before its dots
+    // room for an agent's tag ("C", "CX", ...) before its dots
     static int TagW(string tag) {
         if (tag.Length <= 1) return LabelW;
         return Math.Max(LabelW, TextRenderer.MeasureText(tag, labelFont, Size.Empty, TextFormatFlags.NoPadding).Width + 4);

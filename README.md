@@ -17,7 +17,7 @@ One dot per agent session running in a terminal tab. Two Claude tabs = two Claud
 | anything else | one command from its hooks: [Any other agent](#any-other-agent) | | |
 
 Each agent's dots get a short tag: its first letter, or two letters when two of your agents share one. Claude
-alone is **C**; Claude, Codex and Cursor together are **Cl**, **Cx** and **Cu**. Hover the pill to see which is which.
+alone is **C**; Claude, Codex and Cursor together are **CL**, **CX** and **CU**. Hover the pill to see which is which.
 
 | Dot | Meaning |
 |---|---|

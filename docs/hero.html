@@ -30,6 +30,7 @@
   .pill .l { font: 700 11em/1 "Segoe UI", Inter, sans-serif; color: rgba(200,200,205,.85); }
   .pill .gap { width: 10em; flex: none; }
   .pill .l { font-size: 11em; width: calc(15em / 11); flex: none; }
+  .pill .l.w2 { width: calc(23em / 11); }   /* two-letter tags (CL, CX, CU) */
   .d { width: 12em; height: 12em; border-radius: 50%; flex: none; }
   .d + .d { margin-left: 4em; }
   .d.g { background: var(--green); } .d.y { background: var(--yellow); }
@@ -45,7 +46,7 @@
   .sub b { color: var(--ink); font-weight: 600; }
 
   .closeup { position: absolute; right: 80px; top: 64px; display: flex; flex-direction: column; align-items: flex-end; }
-  .closeup .pill { --s: 3.8; }
+  .closeup .pill { --s: 3.3; }
   .legend { margin-top: 28px; display: grid; grid-template-columns: repeat(2, auto); justify-content: end; gap: 14px 40px;
             font-size: 21px; color: var(--muted); text-align: left; }
   .legend div { display: flex; align-items: center; gap: 10px; }
@@ -121,8 +122,9 @@
 
   <div class="closeup">
     <div class="pill">
-      <span class="l">C</span><i class="d g"></i><i class="d y"></i><i class="d r"></i>
-      <span class="gap"></span><span class="l">G</span><i class="d hy"></i>
+      <span class="l w2">CL</span><i class="d g"></i><i class="d y"></i>
+      <span class="gap"></span><span class="l w2">CX</span><i class="d r"></i>
+      <span class="gap"></span><span class="l w2">CU</span><i class="d hy"></i>
       <span class="gap"></span><span class="l">H</span><i class="d off"></i>
     </div>
     <div class="legend">
@@ -137,7 +139,7 @@
     <div>
       <div class="cap">Watching a movie <small>Claude finished</small></div>
       <div class="screen movie">
-        <div class="pill"><span class="l">C</span><i class="d g"></i><span class="gap"></span><span class="l">G</span><i class="d off"></i><span class="gap"></span><span class="l">H</span><i class="d off"></i></div>
+        <div class="pill"><span class="l w2">CL</span><i class="d g"></i><span class="gap"></span><span class="l w2">CX</span><i class="d g"></i><span class="gap"></span><span class="l w2">CU</span><i class="d off"></i></div>
         <div class="frame"><div class="sun"></div><div class="m1"></div><div class="m2"></div></div>
         <div class="bar"><div class="play"></div><div class="track"><i></i></div><div class="t">1:12:40</div></div>
       </div>
@@ -145,16 +147,16 @@
     <div>
       <div class="cap">Playing a game <small>two agents working</small></div>
       <div class="screen game">
-        <div class="pill"><span class="l">C</span><i class="d y"></i><span class="gap"></span><span class="l">G</span><i class="d y"></i><span class="gap"></span><span class="l">H</span><i class="d off"></i></div>
+        <div class="pill"><span class="l w2">CL</span><i class="d y"></i><span class="gap"></span><span class="l w2">CX</span><i class="d y"></i><span class="gap"></span><span class="l w2">CU</span><i class="d off"></i></div>
         <div class="orb"></div><div class="grid"></div><div class="ship"></div>
         <div class="hud"><div class="hp"><i></i></div><div class="score">SCORE 048210</div></div>
       </div>
     </div>
     <div>
-      <div class="cap">On the web <small>Claude needs you</small></div>
+      <div class="cap">On the web <small>Codex needs you</small></div>
       <div class="screen web">
-        <div class="pill"><span class="l">C</span><i class="d r"></i><i class="d g"></i><span class="gap"></span><span class="l">G</span><i class="d off"></i><span class="gap"></span><span class="l">H</span><i class="d g"></i></div>
-        <div class="tip">C1 Claude: <b>NEEDS YOU</b> - api-server (8s)<br>C2 Claude: done - website (3m)<br>H1 Hermes: done - notes (12m)</div>
+        <div class="pill"><span class="l w2">CL</span><i class="d g"></i><i class="d g"></i><span class="gap"></span><span class="l w2">CX</span><i class="d r"></i><span class="gap"></span><span class="l w2">CU</span><i class="d off"></i></div>
+        <div class="tip">CX1 Codex: <b>NEEDS YOU</b> - api-server (8s)<br>CL1 Claude: done - website (3m)<br>CL2 Claude: done - notes (12m)</div>
         <div class="chrome"><div class="tabs"><div class="tab on"></div><div class="tab"></div></div><div class="url">example.com/recipes</div></div>
         <div class="page">
           <div class="hero"></div>
@@ -165,6 +167,6 @@
     </div>
   </div>
 
-  <footer><span>Claude Code · Grok CLI · Hermes Agent &nbsp;·&nbsp; Windows pill, agents on Linux &nbsp;·&nbsp; MIT</span><span class="repo">github.com/Coinupbtc/agent-lights</span></footer>
+  <footer><span>Claude Code · Codex · Cursor · Grok · Hermes · any agent &nbsp;·&nbsp; Windows pill, agents on Linux &nbsp;·&nbsp; MIT</span><span class="repo">github.com/Coinupbtc/agent-lights</span></footer>
 </body>
 </html>

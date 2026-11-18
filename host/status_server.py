@@ -3,8 +3,8 @@
 
 One dot per agent session running in a terminal tab. Two Claude tabs = two Claude dots. An agent
 with no tab shows one empty ring. Each agent gets a short tag drawn next to its dots: its first
-letter, or two letters when another agent on this machine starts with the same one (Claude and
-Codex -> Cl, Cx). ~/.config/agent-lights/config.json lists the agents to show and can set your own:
+letter, or two capitals when another agent on this machine starts with the same one (Claude and
+Codex -> CL, CX; capitals because a small lowercase l looks like an I). ~/.config/agent-lights/config.json lists the agents to show and can set your own:
   {"agents": ["claude", "codex", "hermes"], "tags": {"codex": "X"}}
 
 GET /status ->
@@ -57,11 +57,11 @@ CONFIG_FILE = os.environ.get("AGENT_LIGHTS_CONFIG") or os.path.expanduser("~/.co
 CLAUDE_PROJECTS = os.path.expanduser("~/.claude/projects")
 # agent key (the --agent name its hook uses) -> (name, tag when another agent here shares its first letter)
 KNOWN = {
-    "claude": ("Claude", "Cl"), "codex": ("Codex", "Cx"), "cursor": ("Cursor", "Cu"), "copilot": ("Copilot", "Co"),
-    "crush": ("Crush", "Cr"), "gemini": ("Gemini", "Ge"), "grok": ("Grok", "Gk"), "goose": ("Goose", "Go"),
-    "hermes": ("Hermes", "He"), "opencode": ("opencode", "Op"), "openclaw": ("OpenClaw", "Oc"),
-    "qwen": ("Qwen", "Qw"), "kiro": ("Kiro", "Ki"), "droid": ("Droid", "Dr"), "amp": ("Amp", "Am"),
-    "aider": ("Aider", "Ai"),
+    "claude": ("Claude", "CL"), "codex": ("Codex", "CX"), "cursor": ("Cursor", "CU"), "copilot": ("Copilot", "CO"),
+    "crush": ("Crush", "CR"), "gemini": ("Gemini", "GE"), "grok": ("Grok", "GK"), "goose": ("Goose", "GO"),
+    "hermes": ("Hermes", "HE"), "opencode": ("opencode", "OP"), "openclaw": ("OpenClaw", "OC"),
+    "qwen": ("Qwen", "QW"), "kiro": ("Kiro", "KI"), "droid": ("Droid", "DR"), "amp": ("Amp", "AM"),
+    "aider": ("Aider", "AD"),
 }
 WORKING_STALE_S = 30 * 60   # "working" with no event for 30 min -> show green, it's probably idle
 DROP_S = {"done": 24 * 3600, "working": 24 * 3600, "needs_you": 24 * 3600, "error": 24 * 3600, "ended": 60}
@@ -124,7 +124,7 @@ def _tags(agents: list, cfg: dict) -> dict:
         if len(first[f]) == 1 and f not in taken:
             tags[a] = f
         else:
-            tags[a] = KNOWN[a][1] if a in KNOWN else _name(a)[:2].title()
+            tags[a] = KNOWN[a][1] if a in KNOWN else _name(a)[:2].upper()
     return tags
 
 

@@ -237,7 +237,7 @@ fi
 echo
 echo "On the Windows PC, in this repo's folder, run in PowerShell (one line):"
 echo
-echo "  powershell -ExecutionPolicy Bypass -File .\\windows\\install.ps1 -Server $server -Token $TOKEN -SshHost $ssh_host"
+echo "  powershell -ExecutionPolicy Bypass -File .\\windows\\install.ps1 -Server \"$server\" -Token $TOKEN -SshHost $ssh_host"
 echo
 echo "-SshHost is what you'd type after 'ssh' to reach this machine (an ~/.ssh/config name works too)."
 echo "Keep the token private: it lets the pill list and close your agent sessions."
