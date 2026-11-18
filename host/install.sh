@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Agent Lights, Linux side (the machine your agents run on): hooks for whichever of Claude Code,
-# Grok CLI and Hermes Agent you have, plus the status server the pill polls.
+# Agent Lights, Linux side (the machine your agents run on): hooks for whichever of Claude Code, Codex,
+# Cursor CLI, Grok CLI and Hermes Agent you have, plus the status server the pill polls.
 # Safe to re-run. Every config it edits is backed up first as <file>.bak-agent-lights-<time>.
 #
 #   bash host/install.sh                                # the usual
@@ -19,54 +19,96 @@ TOKEN_FILE="${AGENT_LIGHTS_TOKEN_FILE:-$HOME/.config/agent-lights/token}"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 command -v python3 >/dev/null || { echo "python3 is required"; exit 1; }
 case "$REPO" in *" "*) echo "Move the repo to a folder without spaces in its path first."; exit 1 ;; esac
-found=0
 
-# 1) Claude Code: hooks merged into ~/.claude/settings.json (your other hooks are left alone)
-if [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1; then
-  found=1
-  SETTINGS="$HOME/.claude/settings.json"
-  mkdir -p "$HOME/.claude"
-  [ -s "$SETTINGS" ] || echo '{}' > "$SETTINGS"
-  cp -a "$SETTINGS" "$SETTINGS.bak-agent-lights-$STAMP"
-  python3 - "$SETTINGS" "$HOOK --agent claude" <<'PY'
+# merge our hook into an agent's JSON hooks file; your other hooks stay, an older checkout's copy is replaced
+#   merge_hooks <file> <format claude|cursor> <agent> <Event[:matcher]>...
+merge_hooks() {
+  local file="$1" fmt="$2" agent="$3"; shift 3
+  mkdir -p "$(dirname "$file")"
+  [ -s "$file" ] || echo '{}' > "$file"
+  cp -a "$file" "$file.bak-agent-lights-$STAMP"
+  python3 - "$file" "$fmt" "$HOOK --agent $agent 2>/dev/null || true" "/host/status_hook.py --agent $agent" "$@" <<'PY'
 import json, sys
-path, cmd = sys.argv[1], sys.argv[2]
+path, fmt, cmd, marker, events = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
 with open(path) as f:
     d = json.load(f)
+if fmt == "cursor":
+    d.setdefault("version", 1)
 hooks = d.setdefault("hooks", {})
 added = []
-for ev in ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "SessionEnd"]:
+def ours(h):
+    return marker in h.get("command", "")
+for spec in events:
+    ev, _, matcher = spec.partition(":")
     groups = hooks.setdefault(ev, [])
-    # drop an agent-lights entry from an older checkout path so it isn't doubled
-    for g in groups:
-        g["hooks"] = [h for h in g.get("hooks", [])
-                      if not ("/host/status_hook.py --agent claude" in h.get("command", "") and h.get("command") != cmd)]
-    hooks[ev] = groups = [g for g in groups if g.get("hooks")]
+    if fmt == "cursor":           # [{"command": ...}]
+        groups[:] = [h for h in groups if not (ours(h) and h.get("command") != cmd)]
+        if not any(h.get("command") == cmd for h in groups):
+            groups.append({"command": cmd, "timeout": 3})
+            added.append(ev)
+        continue
+    for g in groups:              # [{"matcher"?: ..., "hooks": [{"type": "command", "command": ...}]}]
+        g["hooks"] = [h for h in g.get("hooks", []) if not (ours(h) and h.get("command") != cmd)]
+    groups[:] = [g for g in groups if g.get("hooks")]
     if any(h.get("command") == cmd for g in groups for h in g.get("hooks", [])):
         continue
-    groups.append({"hooks": [{"type": "command", "command": cmd, "timeout": 3}]})
+    g = {"hooks": [{"type": "command", "command": cmd, "timeout": 3}]}
+    if matcher:
+        g = {"matcher": matcher, **g}
+    groups.append(g)
     added.append(ev)
 with open(path, "w") as f:
     json.dump(d, f, indent=2)
-print("[1/4] Claude Code hooks:", ", ".join(added) or "already in place")
+print(", ".join(added) or "already in place")
 PY
-else
-  echo "[1/4] Claude Code: not found, skipped"
+}
+agents=()
+echo "Agent Lights: hooking the agents on this machine"
+
+# Claude Code: hooks merged into ~/.claude/settings.json
+if [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1; then
+  agents+=(claude)
+  r="$(merge_hooks "$HOME/.claude/settings.json" claude claude \
+        SessionStart UserPromptSubmit PreToolUse PostToolUse Notification Stop SessionEnd)"
+  echo "  Claude Code   hooks in ~/.claude/settings.json: $r"
 fi
 
-# 2) Grok CLI: its own hooks file (Grok also replays Claude's hooks; the hook ignores that copy)
+# Codex CLI: ~/.codex/hooks.json (Codex asks you to trust new hooks once, at its next start)
+CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
+if command -v codex >/dev/null 2>&1 || [ -d "$CODEX_DIR" ]; then
+  agents+=(codex)
+  cev=(SessionStart UserPromptSubmit PreToolUse PermissionRequest PostToolUse Stop)
+  # Interrupt (Esc) exists from Codex 0.150; older versions may refuse unknown event names. No SessionEnd:
+  # Codex's shared daemon fires it when it unloads a conversation (even right after you resume it); a
+  # closed window is caught by its process exiting instead.
+  cver="$(codex --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
+  if [ -n "$cver" ] && { [ "${cver%%.*}" -ge 1 ] || [ "${cver#*.}" -ge 150 ]; } 2>/dev/null; then
+    cev+=(Interrupt)
+  fi
+  r="$(merge_hooks "$CODEX_DIR/hooks.json" claude codex "${cev[@]}")"
+  echo "  Codex         hooks in ${CODEX_DIR/#$HOME/\~}/hooks.json: $r"
+  [ "$r" = "already in place" ] || codex_trust=1
+fi
+
+# Cursor CLI (cursor-agent): ~/.cursor/hooks.json. It has no hook for its approval prompt, so no red.
+if command -v cursor-agent >/dev/null 2>&1; then
+  agents+=(cursor)
+  r="$(merge_hooks "$HOME/.cursor/hooks.json" cursor cursor \
+        sessionStart beforeSubmitPrompt preToolUse postToolUse postToolUseFailure stop sessionEnd)"
+  echo "  Cursor CLI    hooks in ~/.cursor/hooks.json: $r"
+fi
+
+# Grok CLI: its own hooks file (Grok also replays Claude's hooks; the hook ignores that copy)
 if [ -d "$HOME/.grok" ] || command -v grok >/dev/null 2>&1; then
-  found=1
+  agents+=(grok)
   mkdir -p "$HOME/.grok/hooks"
   sed "s#__REPO__#$REPO#g" "$REPO/grok/agent-lights.json" > "$HOME/.grok/hooks/agent-lights.json"
-  echo "[2/4] Grok hooks: ~/.grok/hooks/agent-lights.json"
-else
-  echo "[2/4] Grok CLI: not found, skipped"
+  echo "  Grok CLI      hooks in ~/.grok/hooks/agent-lights.json"
 fi
 
-# 3) Hermes Agent: plugin linked into the active profile and enabled
+# Hermes Agent: plugin linked into the active profile and enabled
 if command -v hermes >/dev/null 2>&1; then
-  found=1
+  agents+=(hermes)
   HP=()
   if [ -n "${HERMES_HOME:-}" ]; then
     HH="$HERMES_HOME"
@@ -83,24 +125,43 @@ if command -v hermes >/dev/null 2>&1; then
   ln -sfn "$REPO/hermes/agent-lights" "$HH/plugins/agent-lights"
   if hermes "${HP[@]}" plugins enable --no-allow-tool-override agent-lights >/dev/null 2>&1 \
      || hermes "${HP[@]}" plugins enable agent-lights >/dev/null 2>&1; then
-    echo "[3/4] Hermes plugin linked + enabled in $HH (a running Hermes gateway picks it up after a restart)"
+    echo "  Hermes Agent  plugin linked + enabled in $HH (a running Hermes gateway picks it up after a restart)"
   else
-    echo "[3/4] Hermes plugin linked in $HH; enable it with:  hermes ${HP[*]} plugins enable agent-lights"
+    echo "  Hermes Agent  plugin linked in $HH; enable it with:  hermes ${HP[*]} plugins enable agent-lights"
   fi
-else
-  echo "[3/4] Hermes Agent: not found, skipped"
 fi
-[ "$found" = 1 ] || echo "      No Claude Code, Grok CLI or Hermes found. Install one, then run this again."
+if [ ${#agents[@]} -eq 0 ]; then
+  echo "  No Claude Code, Codex, Cursor CLI, Grok CLI or Hermes found. Install one and run this again,"
+  echo "  or wire any other agent by hand (README: Any other agent)."
+fi
+
+# which agents get a slot on the pill (~/.config/agent-lights/config.json; your tags and other settings stay)
+CONFIG="${AGENT_LIGHTS_CONFIG:-$HOME/.config/agent-lights/config.json}"
+mkdir -p "$(dirname "$CONFIG")"
+python3 - "$CONFIG" "${agents[@]}" <<'PY'
+import json, sys
+path, found = sys.argv[1], sys.argv[2:]
+try:
+    with open(path) as f:
+        cfg = json.load(f)
+except (OSError, ValueError):
+    cfg = {}
+have = [a for a in cfg.get("agents", []) if isinstance(a, str)]
+cfg["agents"] = have + [a for a in found if a not in have]
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+print("  pill shows    " + (", ".join(cfg["agents"]) or "nothing yet") + f"  ({path})")
+PY
 
 # the pill's Open / Reopen runs this over ssh: a fixed path that works in a non-login ssh command
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$REPO/host/agent-lights-open" "$HOME/.local/bin/agent-lights-open"
 
-# 4) status server
+# status server
 if [ -n "${NO_SERVICE:-}" ]; then
-  echo "[4/4] NO_SERVICE set: start it yourself:  python3 $REPO/host/status_server.py"
+  echo "  NO_SERVICE set: start it yourself:  python3 $REPO/host/status_server.py"
 elif ! systemctl --user show-environment >/dev/null 2>&1; then
-  echo "[4/4] no systemd user session here (WSL without systemd?). Start the server yourself, e.g.:"
+  echo "  No systemd user session here (WSL without systemd?). Start the server yourself, e.g.:"
   echo "      nohup python3 $REPO/host/status_server.py >/dev/null 2>&1 &"
 else
   mkdir -p "$UNIT_DIR"
@@ -141,9 +202,9 @@ EOF
     sleep 0.5
   done
   if curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
-    echo "[4/4] status server running on $BIND:$PORT (agent-lights.service; logs: journalctl --user -u agent-lights)"
+    echo "  status server running on $BIND:$PORT (agent-lights.service; logs: journalctl --user -u agent-lights)"
   else
-    echo "[4/4] status server did not answer; see: journalctl --user -u agent-lights -n 30"
+    echo "  status server did not answer; see: journalctl --user -u agent-lights -n 30"
     exit 1
   fi
   if [ "$BIND" = 0.0.0.0 ] && command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -168,7 +229,11 @@ server="$(IFS=,; echo "${addrs[*]/%/:$PORT}")"
 ssh_host="$USER@${addrs[0]}"
 [ "$BIND" = 127.0.0.1 ] && ssh_host="$USER@localhost"
 echo
-echo "Done. Claude Code and Grok light up from their next session; Hermes the next time you start it."
+echo "Done. Each agent lights up from its next session (Hermes: the next time you start it)."
+if [ -n "${codex_trust:-}" ]; then
+  echo "Codex: the next time you start it, it asks you to review the new hooks. Pick \"Trust all and continue\""
+  echo "       (they only write the light state). Until you do, Codex sessions get no dot."
+fi
 echo
 echo "On the Windows PC, in this repo's folder, run in PowerShell (one line):"
 echo

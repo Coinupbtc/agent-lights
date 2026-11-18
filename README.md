@@ -5,12 +5,23 @@ browse the web. One glance tells you when an agent finishes or needs you. Click 
 
 ![Agent Lights: a small pill of colored dots in the corner of the screen, over a movie, a game and a browser](docs/agent-lights.png)
 
-One dot per agent session running in a terminal tab: **C** = [Claude Code](https://docs.claude.com/en/docs/claude-code),
-**G** = Grok CLI, **H** = [Hermes Agent](https://github.com/NousResearch/hermes-agent). Two Claude tabs = two C dots.
+One dot per agent session running in a terminal tab. Two Claude tabs = two Claude dots. Works with:
+
+| Agent | 🟡 working | 🟢 done | 🔴 needs you |
+|---|---|---|---|
+| [Claude Code](https://docs.claude.com/en/docs/claude-code) | ✓ | ✓ (also after Esc) | permission prompts and questions |
+| [Codex CLI](https://github.com/openai/codex) | ✓ | ✓ (also after Esc) | approval prompts |
+| [Cursor CLI](https://cursor.com/cli) | ✓ | ✓ (also after Esc) | – (Cursor has no hook for its approval prompt yet) |
+| Grok CLI | ✓ | ✓ | permission prompts |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | ✓ | ✓ | questions |
+| anything else | one command from its hooks: [Any other agent](#any-other-agent) | | |
+
+Each agent's dots get a short tag: its first letter, or two letters when two of your agents share one. Claude
+alone is **C**; Claude, Codex and Cursor together are **Cl**, **Cx** and **Cu**. Hover the pill to see which is which.
 
 | Dot | Meaning |
 |---|---|
-| 🟢 green | finished, your turn (also after you press Esc in Claude) |
+| 🟢 green | finished, your turn (also after you press Esc) |
 | 🟡 yellow | working |
 | 🔴 red, blinking | needs you: a permission prompt or a question, or the last turn errored |
 | ◯ grey ring | no session of that agent |
@@ -24,11 +35,11 @@ One dot per agent session running in a terminal tab: **C** = [Claude Code](https
   - **Open**: attach that session in a new tab. A session in a plain tab can be moved: it's stopped there and resumed here.
   - **Close**: end that agent, after a Yes/No.
   - **Close all with no window**: clear the hollow rings.
-  - **Reopen a closed session**: the last 10 from the past day. It runs `claude --resume`, `grok --resume` or
-    `hermes --resume` inside tmux.
+  - **Reopen a closed session**: the last 10 from the past day. It runs the agent's own resume command
+    (`claude --resume`, `codex resume`, `agent --resume`, ...) inside tmux.
 
-Background agents, cron jobs and headless runs (`claude -p`) never get a dot. Only sessions you're actually
-sitting in front of do.
+Background agents, cron jobs, headless runs (`claude -p`, `codex exec`) and the Codex or Cursor desktop apps never
+get a dot. Only sessions in a terminal you're actually sitting in front of do.
 
 ## What you need
 
@@ -47,9 +58,13 @@ git clone https://github.com/Coinupbtc/agent-lights.git ~/agent-lights
 bash ~/agent-lights/host/install.sh
 ```
 
-It hooks into whichever agents you have. Every config it edits is backed up first, and your other hooks are left
-alone. It also starts a small status server (`agent-lights.service`, port 8777). It ends by printing one line to
-paste on Windows, with your address and token filled in.
+It hooks into whichever of Claude Code, Codex, Cursor CLI, Grok CLI and Hermes you have. Every config it edits is
+backed up first, and your other hooks are left alone. Installed another agent later? Run it again. It also starts a
+small status server (`agent-lights.service`, port 8777), and ends by printing one line to paste on Windows, with
+your address and token filled in.
+
+**Codex:** the next time you start `codex`, it asks you to review the new hooks. Pick **Trust all and continue**.
+Codex runs no hook until you do.
 
 **2. On Windows**, download this repo (Code → Download ZIP, then unzip), open PowerShell in that folder, and paste the
 line from step 1. It looks like this:
@@ -77,7 +92,35 @@ claude() {
 }
 ```
 
-Copy it with `grok` or `hermes` in place of `claude` for those.
+Copy it with `codex`, `agent`, `grok` or `hermes` in place of `claude` for those.
+
+### Your own tags
+
+`~/.config/agent-lights/config.json` (on the Linux machine) lists the agents that get a slot on the pill, in order.
+Add `tags` to pick your own (one to three characters):
+
+```json
+{
+  "agents": ["claude", "codex", "cursor"],
+  "tags": {"codex": "X", "cursor": "U"}
+}
+```
+
+The server rereads it on its own; the pill updates within a couple of seconds.
+
+### Any other agent
+
+Anything that can run a command when it starts working, finishes or waits for you can drive a dot:
+
+```bash
+python3 ~/agent-lights/host/status_hook.py --agent aider --state working     # also: done, needs_you, error, ended
+```
+
+- Add `--session <id>` if the agent has session ids; without it you get one dot per running process.
+- If the agent's hooks send a JSON event on stdin with `hook_event_name` (the Claude Code format, which Factory Droid,
+  Qwen Code and others also use), leave out `--state`: `status_hook.py --agent droid` reads the event itself.
+- Put the agent in the `agents` list above to give it a slot. For Reopen, add its resume command:
+  `"resume": {"aider": "aider --restore-chat-history"}` (`{id}` and `{cwd}` are filled in).
 
 ## Security
 
@@ -93,11 +136,14 @@ Copy it with `grok` or `hermes` in place of `claude` for those.
 
 ## How it works
 
-- **Claude Code / Grok:** command hooks run `host/status_hook.py`, which writes one small JSON file per session to
-  `~/.local/state/agent-lights/sessions/`. It records the agent's process ID and start time, and whether it sits
-  in a real terminal tab. **Hermes:** the `hermes/agent-lights` plugin writes the same files.
-- **Esc:** Claude Code fires no hook when you interrupt it, so the server reads the end of the transcript to turn a
-  stuck yellow dot green.
+- **Claude Code / Codex / Cursor / Grok:** command hooks run `host/status_hook.py`, which writes one small JSON
+  file per session to `~/.local/state/agent-lights/sessions/`. It records the agent's process ID and start time,
+  and whether it sits in a real terminal tab. **Hermes:** the `hermes/agent-lights` plugin writes the same files.
+- **Codex** runs hooks in one background server shared by all your Codex windows, so the hook finds the window
+  each conversation belongs to: by its id for `codex resume <id>`, otherwise the newest window in that folder.
+- **Esc:** Claude Code fires no hook when you interrupt it (older Codex neither), so the server reads the end of the
+  transcript to turn a stuck yellow or red dot green.
+- A hook never blocks its agent: it prints nothing and always exits 0, even if this folder is deleted.
 - **`host/status_server.py`** (Python standard library only) drops a session the moment its process exits. It works
   out whether the session is in tmux (attached or not), a plain ssh tab or a desktop terminal, and serves `/status`.
 - **`windows/AgentLights.ps1`** is a WinForms pill compiled at launch by Windows PowerShell. It polls every 2 s, and
@@ -115,6 +161,8 @@ Copy it with `grok` or `hermes` in place of `claude` for those.
 
 - A macOS menu-bar pill. The server side would work as is.
 - Agents running natively on Windows or macOS. The hooks read Linux `/proc`.
+- Built-in hooks for Gemini CLI, GitHub Copilot CLI and opencode (all have hook or plugin systems; use
+  [Any other agent](#any-other-agent) until then).
 
 ## License
 

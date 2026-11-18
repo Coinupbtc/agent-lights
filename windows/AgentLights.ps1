@@ -1,10 +1,11 @@
-# Agent Lights pill: always-on-top status dots for your AI agents - one dot per Claude Code (C), Grok (G)
-# and Hermes (H) session running in a terminal tab, so two Claude tabs = two C dots.
+# Agent Lights pill: always-on-top status dots for your AI agents - one dot per agent session running in a
+# terminal tab (Claude Code, Codex, Cursor, Grok, Hermes, ...), so two Claude tabs = two Claude dots. The agent
+# machine picks each agent's tag: its first letter, or two letters when two agents share one (Cl, Cx).
 # Left-click = bring up your terminal window (a normal local Windows Terminal with tabs) / click again
 # to tuck it away. Drag = move. Hover = which dot is what.
 # Right-click = one row per dot: Open (attach it in a new tab; a plain-tab session is moved here and
 # resumed) or Close (end that agent), "Close all with no window", and "Reopen a closed session" (starts
-# claude / grok / hermes again with --resume). A hollow ring = it runs in tmux with no window showing it.
+# the agent again with its resume command). A hollow ring = it runs in tmux with no window showing it.
 # Needs nothing beyond Windows PowerShell 5.1 and Windows Terminal (both built into Windows 11).
 # Settings: %APPDATA%\AgentLights\config.json (written by install.ps1); a parameter passed here wins.
 param(
@@ -70,21 +71,27 @@ public class AgentLightsPill : Form {
 
     string[] urls; string token, profile, posFile, sshHost, openCmd, appDir;
     volatile bool reachable;
-    volatile string dotstr = "C:off,G:off,H:off";
+    volatile string dotstr = "?:off";   // "tag:color,..." for every dot; also the pill's shape while offline
     volatile DotRow[] rows = null;   // per-dot detail from the agent machine (null = older server: dotstr only)
-    volatile string[][] closedRows = new string[0][];   // recently ended: {letter, id, text}
+    volatile string[][] closedRows = new string[0][];   // recently ended: {tag, id, text}
     volatile string tip = "connecting to your agent machine...";
     bool pulse;
     Point downAt; Point formAt; bool dragging; bool mouseDown;
     ToolTip tt = new ToolTip();
     System.Windows.Forms.Timer uiTimer = new System.Windows.Forms.Timer();
     System.Windows.Forms.Timer adoptTimer = new System.Windows.Forms.Timer();
-    Font labelFont = new Font("Segoe UI", 8f, FontStyle.Bold);
+    static Font labelFont = new Font("Segoe UI", 8f, FontStyle.Bold);
     IntPtr term = IntPtr.Zero;               // the terminal window this pill shows / hides
     HashSet<IntPtr> before = new HashSet<IntPtr>();
     int adoptTicks;
 
     const int Dot = 12, DotGap = 4, LabelW = 12, GroupGap = 10, Pad = 10;
+
+    // room for an agent's tag ("C", "Cx", ...) before its dots
+    static int TagW(string tag) {
+        if (tag.Length <= 1) return LabelW;
+        return Math.Max(LabelW, TextRenderer.MeasureText(tag, labelFont, Size.Empty, TextFormatFlags.NoPadding).Width + 4);
+    }
 
     public AgentLightsPill(string urlList, string token, string profile, string sshHost, string openCmd) {
         this.urls = urlList.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
@@ -173,13 +180,22 @@ public class AgentLightsPill : Form {
         }
         return l.ToArray();
     }
+    static string Offline(string ds) {
+        // can't reach the agent machine: one grey ring per agent we last saw
+        List<string> tags = new List<string>();
+        foreach (string part in ds.Split(',')) {
+            string[] kv = part.Split(':');
+            if (kv.Length == 2 && (tags.Count == 0 || tags[tags.Count - 1] != kv[0] + ":off")) tags.Add(kv[0] + ":off");
+        }
+        return tags.Count > 0 ? string.Join(",", tags.ToArray()) : "?:off";
+    }
     DotRow[] Current() {
-        if (!reachable) return FromDotstr("C:off,G:off,H:off");
+        if (!reachable) return FromDotstr(Offline(dotstr));
         DotRow[] r = rows;
         return r != null ? r : FromDotstr(dotstr);
     }
     static List<List<DotRow>> Groups(DotRow[] all) {
-        // consecutive dots with the same letter = one group (C dots, then G, then H)
+        // consecutive dots with the same tag = one group (Claude's dots, then Codex's, ...)
         List<List<DotRow>> groups = new List<List<DotRow>>();
         List<DotRow> cur = null;
         foreach (DotRow r in all) {
@@ -193,7 +209,7 @@ public class AgentLightsPill : Form {
         int w = 2 * Pad;
         for (int i = 0; i < g.Count; i++) {
             int n = g[i].Count;
-            w += LabelW + n * Dot + (n - 1) * DotGap;
+            w += TagW(g[i][0].Letter) + n * Dot + (n - 1) * DotGap;
             if (i > 0) w += GroupGap;
         }
         return Math.Max(w, 60);
@@ -270,7 +286,7 @@ public class AgentLightsPill : Form {
             if (gi > 0) x += GroupGap;
             using (SolidBrush lb = new SolidBrush(Color.FromArgb(reachable ? 210 : 90, 200, 200, 205)))
                 g.DrawString(groups[gi][0].Letter, labelFont, lb, x - 1, (Height - labelFont.Height) / 2 + 1);
-            x += LabelW;
+            x += TagW(groups[gi][0].Letter);
             for (int i = 0; i < groups[gi].Count; i++) {
                 string l = groups[gi][i].Color;
                 Color c;
@@ -374,7 +390,7 @@ public class AgentLightsPill : Form {
             return;
         }
         // a new tab in our terminal window: ssh to the agent machine and run agent-lights-open there, which attaches the
-        // session if it lives in tmux, or starts the agent again with --resume (claude / grok / hermes)
+        // session if it lives in tmux, or starts the agent again with its resume command
         if (!Regex.IsMatch(id, "^[A-Za-z0-9_.-]+$") || !Regex.IsMatch(sshHost, "^[A-Za-z0-9_.@-]+$")
             || !Regex.IsMatch(openCmd, "^[A-Za-z0-9_./~-]+$")) {
             MessageBox.Show(this, "Can't open " + title + ": unexpected session id, ssh host or OpenCmd.", "Agent Lights");
@@ -404,11 +420,10 @@ public class AgentLightsPill : Form {
 
     void CloseSessions(DotRow[] list) {
         StringBuilder q = new StringBuilder();
-        bool claude = false;
-        foreach (DotRow r in list) { q.Append("\n   " + r.Label + "   " + r.Text); if (r.Letter == "C") claude = true; }
+        foreach (DotRow r in list) q.Append("\n   " + r.Label + "   " + r.Text);
         string msg = (list.Length == 1 ? "Close this session?" : "Close these " + list.Length + " sessions?") + "\n" + q +
                      "\n\nThis ends the agent" + (list.Length == 1 ? "" : "s") + "." +
-                     (claude ? "\nClaude chats are saved: `claude --resume` brings one back." : "");
+                     "\nThe chat is saved: right-click, Reopen a closed session brings it back.";
         if (MessageBox.Show(this, msg, "Agent Lights", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
         ThreadPool.QueueUserWorkItem(delegate {
             StringBuilder errs = new StringBuilder();

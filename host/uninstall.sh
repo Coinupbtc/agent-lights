@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Removes everything host/install.sh added. Your other hooks and settings stay. Backs up settings.json first.
-# Keeps ~/.config/agent-lights/token (delete it yourself if you're done for good).
+# Keeps ~/.config/agent-lights/ (token + config.json; delete it yourself if you're done for good).
 set -euo pipefail
 STAMP="$(date +%Y%m%d-%H%M%S)"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -12,28 +12,43 @@ rm -f "$UNIT_DIR/agent-lights.service" "$UNIT_DIR/agent-lights-fail.service"
 systemctl --user daemon-reload >/dev/null 2>&1 || true
 echo "status server: stopped and removed"
 
-SETTINGS="$HOME/.claude/settings.json"
-if [ -f "$SETTINGS" ]; then
-  cp -a "$SETTINGS" "$SETTINGS.bak-agent-lights-$STAMP"
-  python3 - "$SETTINGS" <<'PY'
+# take our hook out of an agent's JSON hooks file (backed up first); everything else in it stays
+strip_hooks() {
+  local file="$1" label="$2"
+  [ -f "$file" ] || return 0
+  cp -a "$file" "$file.bak-agent-lights-$STAMP"
+  python3 - "$file" "$label" <<'PY'
 import json, sys
-path = sys.argv[1]
+path, label = sys.argv[1], sys.argv[2]
 with open(path) as f:
     d = json.load(f)
 n = 0
+def ours(h):
+    return "/host/status_hook.py --agent " in h.get("command", "")
 for ev, groups in list(d.get("hooks", {}).items()):
+    keep = []
     for g in groups:
-        keep = [h for h in g.get("hooks", []) if "/host/status_hook.py --agent claude" not in h.get("command", "")]
-        n += len(g.get("hooks", [])) - len(keep)
-        g["hooks"] = keep
-    d["hooks"][ev] = [g for g in groups if g.get("hooks")]
-    if not d["hooks"][ev]:
+        if "hooks" in g:            # Claude Code / Codex: groups of hooks
+            inner = [h for h in g["hooks"] if not ours(h)]
+            n += len(g["hooks"]) - len(inner)
+            if inner:
+                keep.append(dict(g, hooks=inner))
+        elif ours(g):               # Cursor: plain list of hooks
+            n += 1
+        else:
+            keep.append(g)
+    if keep:
+        d["hooks"][ev] = keep
+    else:
         del d["hooks"][ev]
 with open(path, "w") as f:
     json.dump(d, f, indent=2)
-print(f"Claude Code: removed {n} hook entries")
+print(f"{label}: removed {n} hook entries")
 PY
-fi
+}
+strip_hooks "$HOME/.claude/settings.json" "Claude Code"
+strip_hooks "${CODEX_HOME:-$HOME/.codex}/hooks.json" "Codex"
+strip_hooks "$HOME/.cursor/hooks.json" "Cursor CLI"
 
 rm -f "$HOME/.grok/hooks/agent-lights.json" && echo "Grok: hooks file removed"
 

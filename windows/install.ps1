@@ -61,7 +61,7 @@ Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
   Where-Object { $_.CommandLine -like "*AgentLights.ps1*" -and $_.ProcessId -ne $PID } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$dest\AgentLights.ps1`""
-Write-Host "[4/4] pill running (top-right): C = Claude Code  G = Grok  H = Hermes, one dot per terminal tab"
+Write-Host "[4/4] pill running (top-right): one dot per agent session in a terminal tab. Hover it to see which is which."
 Write-Host ""
 Write-Host "Click the pill = your terminal. Click again = tuck it away. Drag = move. Hover = which dot is which."
 Write-Host "Right-click = each dot (C1, C2...) with Open (attach it in a new tab) or Close."

@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """Status endpoint for the Agent Lights pill (+ close a session from the pill's right-click menu).
 
-One dot per agent session running in a terminal tab (Claude C, Grok G, Hermes H). Two Claude tabs =
-two C dots. An agent with no tab shows one empty ring.
+One dot per agent session running in a terminal tab. Two Claude tabs = two Claude dots. An agent
+with no tab shows one empty ring. Each agent gets a short tag drawn next to its dots: its first
+letter, or two letters when another agent on this machine starts with the same one (Claude and
+Codex -> Cl, Cx). ~/.config/agent-lights/config.json lists the agents to show and can set your own:
+  {"agents": ["claude", "codex", "hermes"], "tags": {"codex": "X"}}
 
 GET /status ->
   {"dotstr": "C:green,C:yellow,G:off,H:red",      # what old pills draw, left to right
-   "rows": "<one line per dot, tab-separated: letter color window id label text open-target>",
+   "rows": "<one line per dot, tab-separated: tag color window id label text open-target>",
    "lights": {"claude": "yellow", ...},             # worst state per agent
    "light": "<worst overall>", "tip": "<hover text, same order>", "sessions": [...], "ts": ...}
 
-"closed": recently ended terminal sessions, one line each: letter TAB id TAB text (the pill's Reopen menu).
+"closed": recently ended terminal sessions, one line each: tag TAB id TAB text (the pill's Reopen menu).
 
 POST /close  (body id=<session id>) -> ends that agent session:
   a tmux pane that only runs the agent is killed (its tmux session goes with it); otherwise the agent
@@ -28,7 +31,7 @@ private-network source address. The token lives in ~/.config/agent-lights/token 
 mode 600); the pill reads its copy from %APPDATA%\\AgentLights\\config.json. /health is open.
 
 Env: AGENT_LIGHTS_PORT (8777), AGENT_LIGHTS_BIND (0.0.0.0; 127.0.0.1 = same machine / ssh tunnel only),
-AGENT_LIGHTS_STATE_DIR (~/.local/state/agent-lights/sessions), AGENT_LIGHTS_TOKEN_FILE.
+AGENT_LIGHTS_STATE_DIR (~/.local/state/agent-lights/sessions), AGENT_LIGHTS_TOKEN_FILE, AGENT_LIGHTS_CONFIG.
 """
 import glob
 import hmac
@@ -50,8 +53,16 @@ CLOSED_KEEP, CLOSED_MAX_S = 10, 24 * 3600
 PORT = int(os.environ.get("AGENT_LIGHTS_PORT", "8777"))
 BIND = os.environ.get("AGENT_LIGHTS_BIND", "0.0.0.0")
 TOKEN_FILE = os.environ.get("AGENT_LIGHTS_TOKEN_FILE") or os.path.expanduser("~/.config/agent-lights/token")
+CONFIG_FILE = os.environ.get("AGENT_LIGHTS_CONFIG") or os.path.expanduser("~/.config/agent-lights/config.json")
 CLAUDE_PROJECTS = os.path.expanduser("~/.claude/projects")
-AGENTS = (("claude", "C"), ("grok", "G"), ("hermes", "H"))
+# agent key (the --agent name its hook uses) -> (name, tag when another agent here shares its first letter)
+KNOWN = {
+    "claude": ("Claude", "Cl"), "codex": ("Codex", "Cx"), "cursor": ("Cursor", "Cu"), "copilot": ("Copilot", "Co"),
+    "crush": ("Crush", "Cr"), "gemini": ("Gemini", "Ge"), "grok": ("Grok", "Gk"), "goose": ("Goose", "Go"),
+    "hermes": ("Hermes", "He"), "opencode": ("opencode", "Op"), "openclaw": ("OpenClaw", "Oc"),
+    "qwen": ("Qwen", "Qw"), "kiro": ("Kiro", "Ki"), "droid": ("Droid", "Dr"), "amp": ("Amp", "Am"),
+    "aider": ("Aider", "Ai"),
+}
 WORKING_STALE_S = 30 * 60   # "working" with no event for 30 min -> show green, it's probably idle
 DROP_S = {"done": 24 * 3600, "working": 24 * 3600, "needs_you": 24 * 3600, "error": 24 * 3600, "ended": 60}
 COLOR = {"working": "yellow", "stale": "green", "done": "green", "interrupted": "green",
@@ -66,7 +77,64 @@ ALLOWED_NETS = [ipaddress.ip_network(n) for n in
                 ("127.0.0.0/8", "::1/128", "100.64.0.0/10", "fc00::/7",
                  "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12")]
 CLK_TCK = os.sysconf("SC_CLK_TCK")
-_cache = {"tmux_t": 0.0, "tmux": {}, "tx": {}}
+_cache = {"tmux_t": 0.0, "tmux": {}, "tx": {}, "cfg_key": None, "cfg": {}}
+
+
+# ---------- which agents, and their tags ----------
+def _config() -> dict:
+    """~/.config/agent-lights/config.json (re-read when it changes). Bad or missing file = {}."""
+    try:
+        st = os.stat(CONFIG_FILE)
+        key = (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return {}
+    if _cache["cfg_key"] != key:
+        try:
+            with open(CONFIG_FILE) as f:
+                cfg = json.load(f)
+            _cache["cfg"] = cfg if isinstance(cfg, dict) else {}
+        except Exception:
+            _cache["cfg"] = {}
+        _cache["cfg_key"] = key
+    return _cache["cfg"]
+
+
+def _name(agent: str) -> str:
+    return KNOWN.get(agent, (agent.title(),))[0]
+
+
+def _clean_tag(t) -> str:
+    return re.sub(r"[\s,:]", "", str(t))[:3]
+
+
+def _tags(agents: list, cfg: dict) -> dict:
+    """agent -> short tag: the first letter, two letters when two agents here share it, or your own."""
+    mine = {a: _clean_tag(t) for a, t in (cfg.get("tags") or {}).items() if _clean_tag(t)}
+    first = {}
+    for a in agents:
+        if a not in mine:
+            first.setdefault(_name(a)[:1].upper(), []).append(a)
+    taken = set(mine.values())
+    tags = {}
+    for a in agents:
+        if a in mine:
+            tags[a] = mine[a]
+            continue
+        f = _name(a)[:1].upper()
+        if len(first[f]) == 1 and f not in taken:
+            tags[a] = f
+        else:
+            tags[a] = KNOWN[a][1] if a in KNOWN else _name(a)[:2].title()
+    return tags
+
+
+def _agents(cfg: dict, sessions: list, closed: list) -> list:
+    """Agents with a slot on the pill: the configured ones, then any other that has a session."""
+    out = [a for a in (cfg.get("agents") or []) if isinstance(a, str)] or ["claude"]
+    for a in [s["agent"] for s in sessions] + [r.get("agent") or sid.split("-", 1)[0] for _t, sid, r in closed]:
+        if a and a not in out:
+            out.append(a)
+    return out
 
 
 def _archive(path: str, rec: dict, now: float) -> None:
@@ -137,9 +205,18 @@ def _alive(rec: dict):
     if not pid:
         return None
     try:
-        return _stat(int(pid))[3] == str(rec.get("start"))
+        return _stat(int(pid))[3] == str(rec.get("start")) and not _zombie(int(pid))
     except Exception:
         return False
+
+
+def _zombie(pid: int) -> bool:
+    """Exited, but its parent hasn't collected it yet (tmux can leave a closed pane's agent like this)."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] in ("Z", "X")
+    except OSError:
+        return True
 
 
 def _boot_time() -> float:
@@ -233,9 +310,9 @@ def _transcript(rec: dict, sid: str) -> str:
     return hits[0] if hits else ""
 
 
-def _interrupted(path: str) -> bool:
-    """True when the last real entry of a Claude transcript is '[Request interrupted by user...]'.
-    Claude fires no hook on Esc, so without this a stopped turn would stay yellow."""
+def _interrupted(agent: str, path: str) -> bool:
+    """True when the agent's transcript shows the last turn was interrupted (Esc). Claude Code and
+    Codex fire no hook on Esc, so without this a stopped turn would stay yellow (or red)."""
     try:
         st = os.stat(path)
     except OSError:
@@ -249,26 +326,46 @@ def _interrupted(path: str) -> bool:
         with open(path, "rb") as f:
             f.seek(max(0, st.st_size - 256 * 1024))
             lines = f.read().splitlines()
-        for raw in reversed(lines):
-            try:
-                d = json.loads(raw)
-            except Exception:
-                continue
-            if d.get("type") not in ("user", "assistant") or d.get("isSidechain") or d.get("isMeta"):
-                continue
-            content = (d.get("message") or {}).get("content")
-            texts = [content] if isinstance(content, str) else [
-                c.get("text", "") for c in (content or []) if isinstance(c, dict) and c.get("type") == "text"]
-            if d["type"] == "user" and texts and all(t.startswith(("<command-", "<local-command")) for t in texts):
-                continue   # slash-command echo, not a turn
-            result = d["type"] == "user" and any(t.startswith("[Request interrupted by user") for t in texts)
-            break
+        result = (_codex_aborted if agent == "codex" else _claude_aborted)(lines)
     except Exception:
         result = False
     if len(_cache["tx"]) > 64:
         _cache["tx"].clear()
     _cache["tx"][path] = (key, result)
     return result
+
+
+def _codex_aborted(lines: list) -> bool:
+    """Codex rollout: the last turn event is turn_aborted (task_started / task_complete otherwise)."""
+    for raw in reversed(lines):
+        if b"event_msg" not in raw:
+            continue
+        try:
+            d = json.loads(raw)
+        except Exception:
+            continue
+        t = (d.get("payload") or {}).get("type")
+        if t in ("turn_aborted", "task_started", "task_complete", "turn_started", "turn_complete"):
+            return t == "turn_aborted"
+    return False
+
+
+def _claude_aborted(lines: list) -> bool:
+    """Claude transcript: the last real entry is '[Request interrupted by user...]'."""
+    for raw in reversed(lines):
+        try:
+            d = json.loads(raw)
+        except Exception:
+            continue
+        if d.get("type") not in ("user", "assistant") or d.get("isSidechain") or d.get("isMeta"):
+            continue
+        content = (d.get("message") or {}).get("content")
+        texts = [content] if isinstance(content, str) else [
+            c.get("text", "") for c in (content or []) if isinstance(c, dict) and c.get("type") == "text"]
+        if d["type"] == "user" and texts and all(t.startswith(("<command-", "<local-command")) for t in texts):
+            continue   # slash-command echo, not a turn
+        return d["type"] == "user" and any(t.startswith("[Request interrupted by user") for t in texts)
+    return False
 
 
 # ---------- snapshot ----------
@@ -303,9 +400,10 @@ def _load_sessions(now: float) -> list:
             continue
         sid = name[:-5]
         agent = rec.get("agent") or sid.split("-", 1)[0]
-        if st == "working" and agent == "claude":
-            tx = _transcript(rec, sid.split("-", 1)[1] if "-" in sid else sid)
-            if tx and _interrupted(tx):
+        if st in ("working", "needs_you") and agent in ("claude", "codex"):
+            tx = _transcript(rec, sid.split("-", 1)[1] if "-" in sid else sid) if agent == "claude" \
+                else str(rec.get("transcript") or "")
+            if tx and _interrupted(agent, tx):
                 st = "interrupted"
         if st == "working" and age > WORKING_STALE_S:
             st = "stale"
@@ -313,7 +411,18 @@ def _load_sessions(now: float) -> list:
         sessions.append({"id": sid, "agent": agent, "state": st, "where": str(rec.get("where", "")),
                          "age_s": int(age), "first": float(rec.get("first_ts", rec.get("ts", 0))),
                          "window": bool(tab["window"]), "tab": tab["kind"], "tab_words": _tab_words(tab),
-                         "tmux": tab.get("tmux", "")})
+                         "tmux": tab.get("tmux", ""), "_proc": (agent, rec.get("pid"), rec.get("start")),
+                         "_ts": float(rec.get("ts", 0))})
+    # one window shows one conversation: when two sessions sit in the same process (Codex /new, or a
+    # resume inside a running agent), only the most recently active one gets the dot
+    newest = {}
+    for s in sessions:
+        k = s["_proc"]
+        if k[1] and (k not in newest or s["_ts"] > newest[k]["_ts"]):
+            newest[k] = s
+    sessions = [s for s in sessions if not s["_proc"][1] or newest[s["_proc"]] is s]
+    for s in sessions:
+        del s["_proc"], s["_ts"]
     sessions.sort(key=lambda s: s["first"])
     return sessions
 
@@ -325,39 +434,44 @@ def _clean(s: str) -> str:
 def snapshot() -> dict:
     now = time.time()
     sessions = _load_sessions(now)
+    closed_recs = _closed(now, {s["id"] for s in sessions})
+    cfg = _config()
+    agents = _agents(cfg, sessions, closed_recs)
+    tags = _tags(agents, cfg)
+    shown = [a for a in agents if a in (cfg.get("agents") or ["claude"]) or any(s["agent"] == a for s in sessions)]
     dots, rows, lines, lights = [], [], [], {}
-    for agent, letter in AGENTS:
+    for agent in shown:
+        letter, name = tags[agent], _name(agent)
         mine = [s for s in sessions if s["agent"] == agent]
         if not mine:
             dots.append(f"{letter}:off")
             lights[agent] = "off"
-            lines.append(f"{letter}  {agent.title()}: no tab")
-            rows.append("\t".join([letter, "off", "1", "", letter, f"{agent.title()}: no tab", ""]))
+            lines.append(f"{letter}  {name}: no tab")
+            rows.append("\t".join([letter, "off", "1", "", letter, f"{name}: no tab", ""]))
             continue
         for i, s in enumerate(mine, 1):
             color = COLOR.get(s["state"], "green")
             s["label"] = f"{letter}{i}"
             words = f"{WORDS.get(s['state'], s['state'])} - {s['where']} ({_ago(s['age_s'])})"
             dots.append(f"{letter}:{color}")
-            lines.append(f"{letter}{i} {agent.title()}: {words}" + ("" if s["window"] else " - NO WINDOW"))
+            lines.append(f"{letter}{i} {name}: {words}" + ("" if s["window"] else " - NO WINDOW"))
             target = s["tmux"] if TMUX_TARGET_RE.match(s["tmux"] or "") else ""
             text = f"{s['where']} - {WORDS.get(s['state'], s['state'])} {_ago(s['age_s'])}"
             if s["tab_words"]:
                 text += f" - {s['tab_words']}"
             rows.append("\t".join(_clean(x) for x in
                                   [letter, color, "1" if s["window"] else "0", s["id"], s["label"],
-                                   f"{agent.title()} {text}", target]))
+                                   f"{name} {text}", target]))
         lights[agent] = max((COLOR.get(s["state"], "green") for s in mine), key=RANK.get)
-    worst = max(lights.values(), key=RANK.get)
+    worst = max(lights.values(), key=RANK.get) if lights else "off"
     tip = "\n".join(lines).replace('"', "'")
     for s in sessions:
         s.pop("first", None)
-    letters = dict(AGENTS)
     closed = []
-    for ts, sid, rec in _closed(now, {s["id"] for s in sessions}):
+    for ts, sid, rec in closed_recs:
         agent = rec.get("agent") or sid.split("-", 1)[0]
-        closed.append("\t".join(_clean(x) for x in [letters.get(agent, "?"), sid,
-                      f"{agent.title()} {rec.get('where', '')} - closed {_ago(int(now - ts))} ago"]))
+        closed.append("\t".join(_clean(x) for x in [tags.get(agent, "?"), sid,
+                      f"{_name(agent)} {rec.get('where', '')} - closed {_ago(int(now - ts))} ago"]))
     return {"dotstr": ",".join(dots), "rows": "\n".join(rows), "closed": "\n".join(closed), "lights": lights,
             "light": worst, "tip": tip, "sessions": sessions, "ts": int(now)}
 

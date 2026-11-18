@@ -3,12 +3,14 @@
 
 - live in tmux       -> attach that pane (the agent itself, nothing restarts)
 - live in a plain tab (no tmux) -> asks, then stops it there and resumes it here
-- closed / ended     -> starts the agent again with --resume (claude / grok / hermes)
+- closed / ended     -> starts the agent again with its resume command (Claude Code, Codex, Cursor, Grok, Hermes;
+                       any other agent: "resume": {"<agent>": "mycli --resume {id}"} in ~/.config/agent-lights/config.json)
 Resumed sessions run inside tmux, so a dropped connection doesn't kill them. Exit code 1 = it couldn't (the tab stays open to show why).
 """
 import glob
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -52,24 +54,56 @@ def first_cwd(transcript: str) -> str:
     return ""
 
 
+def exe(rec: dict, *names: str) -> str:
+    """The agent's program: on PATH, else the path its process ran from (a non-login ssh often lacks nvm's PATH)."""
+    for n in names:
+        hit = shutil.which(n)
+        if hit:
+            return hit
+    a0 = str(rec.get("argv0") or "")
+    if a0 and os.path.basename(a0) in names and os.access(a0, os.X_OK):
+        return a0
+    fail(f"{names[0]} is not on PATH on this machine")
+
+
+def first_cwd_codex(rollout: str) -> str:
+    """The cwd in a Codex rollout's session_meta line (the first line)."""
+    try:
+        with open(rollout) as f:
+            return str(((json.loads(f.readline()) or {}).get("payload") or {}).get("cwd") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
 def resume_cmd(agent: str, sid: str, rec: dict):
     """-> (argv, cwd) that resumes this session."""
+    own = (ss._config().get("resume") or {}).get(agent)
+    if own:
+        cwd = (rec.get("proc_cwd") or rec.get("cwd")) or HOME
+        argv = [a.replace("{id}", sid).replace("{cwd}", cwd) for a in shlex.split(str(own))]
+        if not shutil.which(argv[0]):
+            fail(f"{argv[0]} is not on PATH on this machine")
+        return argv, cwd
     if agent == "claude":
         tx = ss._transcript(rec, sid)
-        cwd = rec.get("proc_cwd") or (first_cwd(tx) if tx else "") or HOME
-        exe = shutil.which("claude") or fail("claude is not on PATH on this machine")
-        return [exe, "--resume", sid], cwd
+        cwd = (rec.get("proc_cwd") or rec.get("cwd")) or (first_cwd(tx) if tx else "") or HOME
+        return [exe(rec, "claude"), "--resume", sid], cwd
     if agent == "grok":
         hits = glob.glob(os.path.join(HOME, ".grok", "sessions", "*", glob.escape(sid)))
-        cwd = unquote(os.path.basename(os.path.dirname(hits[0]))) if hits else rec.get("proc_cwd") or HOME
-        exe = shutil.which("grok") or fail("grok is not on PATH on this machine")
-        return [exe, "--resume", sid, "--cwd", cwd], cwd
+        cwd = unquote(os.path.basename(os.path.dirname(hits[0]))) if hits else (rec.get("proc_cwd") or rec.get("cwd")) or HOME
+        return [exe(rec, "grok"), "--resume", sid, "--cwd", cwd], cwd
+    if agent == "codex":
+        tx = rec.get("transcript") or ""
+        cwd = (rec.get("proc_cwd") or rec.get("cwd")) or (first_cwd_codex(tx) if tx else "") or HOME
+        return [exe(rec, "codex"), "resume", sid, "-C", cwd], cwd
+    if agent == "cursor":
+        return [exe(rec, "cursor-agent", "agent"), f"--resume={sid}"], (rec.get("proc_cwd") or rec.get("cwd")) or HOME   # Cursor keeps chats per folder
     if agent == "hermes":
         if sid.startswith("ask-"):
             fail("That Hermes entry was a prompt, not a session; nothing to resume.")
-        exe = shutil.which("hermes") or fail("hermes is not on PATH on this machine")
-        return [exe, "--resume", sid], rec.get("proc_cwd") or HOME   # hermes restores its own cwd
-    fail(f"don't know how to resume a {agent} session")
+        return [exe(rec, "hermes"), "--resume", sid], (rec.get("proc_cwd") or rec.get("cwd")) or HOME   # hermes restores its own cwd
+    fail(f"don't know how to resume a {agent} session. Add its command to ~/.config/agent-lights/config.json:\n"
+         f'  "resume": {{"{agent}": "{agent} --resume {{id}}"}}')
 
 
 def start_in_tmux(full_id: str, agent: str, sid: str, rec: dict) -> None:
@@ -118,7 +152,7 @@ def main() -> None:
         if tab["kind"] == "tmux":
             os.execvp("tmux", ["tmux", "attach", "-t", tab["tmux"]])
         where = ss._tab_words(tab) or "a terminal without tmux"
-        print(f"\n  {agent.title()} '{rec.get('where', '')}' is running in {where}.")
+        print(f"\n  {ss._name(agent)} '{rec.get('where', '')}' is running in {where}.")
         print("  A plain tab can't be shown here. Move it into this tab instead: it stops there and resumes here.")
         if rec.get("state") == "working":
             print("  It is WORKING right now. Moving it interrupts the current step.")
