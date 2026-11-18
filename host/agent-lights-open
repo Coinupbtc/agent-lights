@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""agent-lights-open <session id> - what the pill's Open / Reopen runs over `ssh -t <host>` (needs a tty).
+
+- live in tmux       -> attach that pane (the agent itself, nothing restarts)
+- live in a plain tab (no tmux) -> asks, then stops it there and resumes it here
+- closed / ended     -> starts the agent again with --resume (claude / grok / hermes)
+Resumed sessions run inside tmux, so a dropped connection doesn't kill them. Exit code 1 = it couldn't (the tab stays open to show why).
+"""
+import glob
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from urllib.parse import unquote
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import status_server as ss  # noqa: E402
+
+HOME = os.path.expanduser("~")
+os.environ["PATH"] = os.pathsep.join([f"{HOME}/.local/bin", f"{HOME}/.grok/bin", os.environ.get("PATH", "")])
+
+
+def fail(msg: str) -> None:
+    print(f"\n  {msg}\n")
+    sys.exit(1)
+
+
+def load(sid: str):
+    for d, live in ((ss.STATE_DIR, True), (ss.CLOSED_DIR, False)):
+        try:
+            with open(os.path.join(d, sid + ".json")) as f:
+                return json.load(f), live
+        except (OSError, ValueError):
+            pass
+    return None, False
+
+
+def first_cwd(transcript: str) -> str:
+    try:
+        with open(transcript) as f:
+            for line in f:
+                try:
+                    cwd = json.loads(line).get("cwd")
+                except ValueError:
+                    continue
+                if cwd:
+                    return cwd
+    except OSError:
+        pass
+    return ""
+
+
+def resume_cmd(agent: str, sid: str, rec: dict):
+    """-> (argv, cwd) that resumes this session."""
+    if agent == "claude":
+        tx = ss._transcript(rec, sid)
+        cwd = rec.get("proc_cwd") or (first_cwd(tx) if tx else "") or HOME
+        exe = shutil.which("claude") or fail("claude is not on PATH on this machine")
+        return [exe, "--resume", sid], cwd
+    if agent == "grok":
+        hits = glob.glob(os.path.join(HOME, ".grok", "sessions", "*", glob.escape(sid)))
+        cwd = unquote(os.path.basename(os.path.dirname(hits[0]))) if hits else rec.get("proc_cwd") or HOME
+        exe = shutil.which("grok") or fail("grok is not on PATH on this machine")
+        return [exe, "--resume", sid, "--cwd", cwd], cwd
+    if agent == "hermes":
+        if sid.startswith("ask-"):
+            fail("That Hermes entry was a prompt, not a session; nothing to resume.")
+        exe = shutil.which("hermes") or fail("hermes is not on PATH on this machine")
+        return [exe, "--resume", sid], rec.get("proc_cwd") or HOME   # hermes restores its own cwd
+    fail(f"don't know how to resume a {agent} session")
+
+
+def start_in_tmux(full_id: str, agent: str, sid: str, rec: dict) -> None:
+    argv, cwd = resume_cmd(agent, sid, rec)
+    if not os.path.isdir(cwd):
+        cwd = HOME
+    name = f"{agent}-{time.strftime('%m%d-%H%M%S')}"
+    r = subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", cwd, *argv], capture_output=True, text=True)
+    if r.returncode != 0:
+        fail(f"tmux could not start {agent}: {r.stderr.strip()}")
+    # no hook fires when a session starts, so write its dot now (green: waiting for you)
+    try:
+        pane_pid = int(subprocess.run(["tmux", "list-panes", "-t", f"={name}", "-F", "#{pane_pid}"],
+                                      capture_output=True, text=True).stdout.split()[0])
+        now = time.time()
+        new = {"agent": agent, "state": "done", "event": "agent-lights-open", "where": rec.get("where") or os.path.basename(cwd),
+               "ts": now, "first_ts": now, "pid": pane_pid, "start": ss._stat(pane_pid)[3], "term": True,
+               "proc_cwd": cwd}
+        if rec.get("transcript"):
+            new["transcript"] = rec["transcript"]
+        os.makedirs(ss.STATE_DIR, exist_ok=True)
+        tmp = os.path.join(ss.STATE_DIR, f".{full_id}.{os.getpid()}.tmp")
+        with open(tmp, "w") as f:
+            json.dump(new, f)
+        os.replace(tmp, os.path.join(ss.STATE_DIR, full_id + ".json"))
+        try:
+            os.remove(os.path.join(ss.CLOSED_DIR, full_id + ".json"))
+        except OSError:
+            pass
+    except Exception:
+        pass
+    print(f"  resuming {agent} {sid} in {cwd} (tmux {name}) ...")
+    os.execvp("tmux", ["tmux", "attach", "-t", f"={name}"])
+
+
+def main() -> None:
+    if len(sys.argv) != 2 or not ss.ID_RE.match(sys.argv[1]):
+        fail("usage: agent-lights-open <session id>")
+    full_id = sys.argv[1]
+    agent, _, sid = full_id.partition("-")
+    rec, in_sessions = load(full_id)
+    if rec is None:
+        fail(f"{full_id}: no record of that session (it ended more than a day ago?)")
+    if in_sessions and ss._alive(rec):
+        tab = ss._tab(rec)
+        if tab["kind"] == "tmux":
+            os.execvp("tmux", ["tmux", "attach", "-t", tab["tmux"]])
+        where = ss._tab_words(tab) or "a terminal without tmux"
+        print(f"\n  {agent.title()} '{rec.get('where', '')}' is running in {where}.")
+        print("  A plain tab can't be shown here. Move it into this tab instead: it stops there and resumes here.")
+        if rec.get("state") == "working":
+            print("  It is WORKING right now. Moving it interrupts the current step.")
+        try:
+            ans = input("  Move it here? [y/N] ").strip().lower()
+        except EOFError:
+            ans = ""
+        if ans not in ("y", "yes"):
+            sys.exit(0)
+        code, res = ss.close_session(full_id)
+        if not res.get("ok"):
+            fail(f"could not stop it there: {res}")
+    start_in_tmux(full_id, agent, sid, rec)
+
+
+if __name__ == "__main__":
+    main()

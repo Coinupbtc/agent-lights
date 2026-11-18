@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Lights</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0d12; --ink: #eef0f5; --muted: #9aa1b2; --faint: #5d6474;
+    --green: rgb(60,220,90); --yellow: rgb(250,200,40); --red: rgb(240,60,50); --ring: rgb(85,85,92);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1600px; height: 900px; background: var(--bg); overflow: hidden; }
+  body {
+    font-family: Inter, "DejaVu Sans", sans-serif; color: var(--ink);
+    background:
+      radial-gradient(900px 500px at 82% 8%, rgba(60,220,90,.10), transparent 60%),
+      radial-gradient(700px 500px at 8% 100%, rgba(120,90,255,.10), transparent 60%),
+      var(--bg);
+  }
+
+  /* ---- the pill, same geometry as the real one (1em = 1 real pixel x --s) ---- */
+  .pill {
+    --s: 1; font-size: calc(var(--s) * 1px);
+    display: inline-flex; align-items: center; height: 26em; padding: 0 10em;
+    background: rgb(28,28,32); border: max(1px, calc(var(--s) * .8px)) solid rgb(90,90,100); border-radius: 13em;
+    box-shadow: 0 calc(var(--s) * 3px) calc(var(--s) * 12px) rgba(0,0,0,.45);
+  }
+  .pill .l { font: 700 11em/1 "Segoe UI", Inter, sans-serif; color: rgba(200,200,205,.85); }
+  .pill .gap { width: 10em; flex: none; }
+  .pill .l { font-size: 11em; width: calc(15em / 11); flex: none; }
+  .d { width: 12em; height: 12em; border-radius: 50%; flex: none; }
+  .d + .d { margin-left: 4em; }
+  .d.g { background: var(--green); } .d.y { background: var(--yellow); }
+  .d.r { background: var(--red); box-shadow: 0 0 calc(var(--s) * 6px) rgba(240,60,50,.9); }
+  .d.off { border: 1.5em solid var(--ring); }
+  .d.hy { border: 2.5em solid var(--yellow); transform: scale(.84); }
+
+  /* ---- header ---- */
+  header { position: absolute; left: 80px; top: 70px; width: 760px; }
+  h1 { font-size: 76px; font-weight: 800; letter-spacing: -2.5px; line-height: 1; }
+  h1 span { color: var(--green); }
+  .sub { margin-top: 22px; font-size: 27px; line-height: 1.38; color: var(--muted); font-weight: 500; }
+  .sub b { color: var(--ink); font-weight: 600; }
+
+  .closeup { position: absolute; right: 80px; top: 64px; display: flex; flex-direction: column; align-items: flex-end; }
+  .closeup .pill { --s: 3.8; }
+  .legend { margin-top: 28px; display: grid; grid-template-columns: repeat(2, auto); justify-content: end; gap: 14px 40px;
+            font-size: 21px; color: var(--muted); text-align: left; }
+  .legend div { display: flex; align-items: center; gap: 10px; }
+  .legend .d { --s: 1.4; font-size: calc(var(--s) * 1px); }
+
+  /* ---- three screens ---- */
+  .row { position: absolute; left: 80px; right: 80px; top: 378px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 36px; }
+  .cap { font-size: 21px; font-weight: 600; margin-bottom: 14px; color: var(--ink); display: flex; gap: 10px; align-items: baseline; }
+  .cap small { font-size: 17px; color: var(--muted); font-weight: 500; }
+  .screen { position: relative; height: 362px; border-radius: 14px; overflow: hidden;
+            border: 1px solid rgba(255,255,255,.08); box-shadow: 0 18px 50px rgba(0,0,0,.45); }
+  .screen .pill { --s: 1.55; position: absolute; top: 12px; right: 12px; z-index: 5; }
+
+  /* movie: letterboxed sunset + player bar */
+  .movie { background: #000; }
+  .movie .frame { position: absolute; left: 0; right: 0; top: 30px; bottom: 30px; overflow: hidden;
+    background: linear-gradient(180deg, #1c1640 0%, #5b2a63 38%, #e0705a 66%, #f5b36a 80%, #2a1b2e 80.5%); }
+  .movie .sun { position: absolute; left: 50%; top: 52%; width: 110px; height: 110px; margin-left: -55px; border-radius: 50%;
+    background: radial-gradient(circle, #ffe3a1 0%, #ffb35c 60%, rgba(255,179,92,0) 72%); }
+  .movie .m1, .movie .m2 { position: absolute; left: 0; right: 0; bottom: 0; }
+  .movie .m1 { height: 46%; background: #3a2346; clip-path: polygon(0 60%, 14% 30%, 27% 52%, 42% 18%, 58% 48%, 72% 26%, 86% 50%, 100% 32%, 100% 100%, 0 100%); }
+  .movie .m2 { height: 30%; background: #1d1326; clip-path: polygon(0 40%, 18% 62%, 34% 30%, 52% 64%, 70% 38%, 88% 60%, 100% 44%, 100% 100%, 0 100%); }
+  .movie .bar { position: absolute; left: 18px; right: 18px; bottom: 11px; display: flex; align-items: center; gap: 12px; z-index: 4; }
+  .movie .play { width: 0; height: 0; border-left: 11px solid #e8e8ee; border-top: 7px solid transparent; border-bottom: 7px solid transparent; }
+  .movie .track { flex: 1; height: 4px; border-radius: 2px; background: rgba(255,255,255,.22); }
+  .movie .track i { display: block; width: 63%; height: 100%; border-radius: 2px; background: #e8e8ee; }
+  .movie .t { font: 500 12px "JetBrains Mono", monospace; color: #c9c9d2; }
+
+  /* game: synth horizon + HUD */
+  .game { background: linear-gradient(180deg, #0a0820 0%, #24104a 55%, #3a145a 56%, #0a0618 100%); }
+  .game .grid { position: absolute; left: -50%; right: -50%; bottom: -10px; height: 150px;
+    background:
+      repeating-linear-gradient(90deg, rgba(255,80,200,.55) 0 2px, transparent 2px 46px),
+      repeating-linear-gradient(0deg, rgba(255,80,200,.55) 0 2px, transparent 2px 26px);
+    transform: perspective(160px) rotateX(58deg); transform-origin: bottom; }
+  .game .orb { position: absolute; left: 50%; top: 58px; width: 130px; height: 130px; margin-left: -65px; border-radius: 50%;
+    background: repeating-linear-gradient(180deg, #ff9a3c 0 12px, transparent 12px 17px), radial-gradient(circle, #ffd24a, #ff4fa0);
+    -webkit-mask: radial-gradient(circle, #000 64%, transparent 65%); filter: drop-shadow(0 0 22px rgba(255,90,160,.6)); }
+  .game .ship { position: absolute; left: 50%; bottom: 48px; width: 64px; height: 30px; margin-left: -32px; background: #7df9ff;
+    clip-path: polygon(50% 0, 100% 100%, 50% 75%, 0 100%); filter: drop-shadow(0 0 10px #7df9ff); }
+  .game .hud { position: absolute; left: 14px; top: 14px; display: grid; gap: 6px; }
+  .game .hp { width: 120px; height: 8px; border-radius: 4px; background: rgba(255,255,255,.15); }
+  .game .hp i { display: block; width: 72%; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #39ff88, #b6ff3c); }
+  .game .score { font: 500 12px "JetBrains Mono", monospace; color: #c7f9ff; letter-spacing: 1px; }
+
+  /* web: browser window */
+  .web { background: #f3f4f7; }
+  .web .chrome { height: 64px; background: #dfe2e8; border-bottom: 1px solid #cdd1d9; }
+  .web .tabs { display: flex; gap: 6px; padding: 8px 10px 0; }
+  .web .tab { height: 22px; width: 120px; border-radius: 8px 8px 0 0; background: #eceef2; }
+  .web .tab.on { background: #f3f4f7; }
+  .web .url { margin: 6px 12px 0; height: 22px; border-radius: 11px; background: #fff; font: 500 12px Inter, sans-serif; color: #6b7280;
+    padding: 4px 12px; width: 52%; }
+  .web .page { padding: 18px 22px; display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px; }
+  .web .hero { height: 96px; border-radius: 10px; background: linear-gradient(120deg, #6d8bff, #a46bff); grid-column: span 2; }
+  .web .lines i { display: block; height: 9px; border-radius: 5px; background: #d6d9e0; margin-bottom: 9px; }
+  .web .card { border-radius: 10px; background: #e6e8ee; height: 78px; }
+  .tip { position: absolute; top: 58px; right: 12px; z-index: 6; background: #fffffe; color: #1f2430; border: 1px solid #9aa0ab;
+    font: 500 13px "Segoe UI", Inter, sans-serif; padding: 6px 9px; box-shadow: 0 6px 18px rgba(0,0,0,.18); white-space: nowrap; line-height: 1.45; }
+  .tip b { color: #c42a1f; }
+
+  footer { position: absolute; left: 80px; right: 80px; bottom: 30px; display: flex; justify-content: space-between;
+           font-size: 18px; color: var(--faint); }
+  footer .repo { font-family: "JetBrains Mono", monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Agent <span>Lights</span></h1>
+    <p class="sub">A tiny always-on-top pill for your AI coding agents. <b>Watch a movie, play a game, browse</b>, and
+      see the second an agent finishes or needs you. Click it to jump to the terminal.</p>
+  </header>
+
+  <div class="closeup">
+    <div class="pill">
+      <span class="l">C</span><i class="d g"></i><i class="d y"></i><i class="d r"></i>
+      <span class="gap"></span><span class="l">G</span><i class="d hy"></i>
+      <span class="gap"></span><span class="l">H</span><i class="d off"></i>
+    </div>
+    <div class="legend">
+      <div><i class="d g"></i> done, your turn</div>
+      <div><i class="d y"></i> working</div>
+      <div><i class="d r"></i> needs you</div>
+      <div><i class="d hy"></i> running, no window</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <div class="cap">Watching a movie <small>Claude finished</small></div>
+      <div class="screen movie">
+        <div class="pill"><span class="l">C</span><i class="d g"></i><span class="gap"></span><span class="l">G</span><i class="d off"></i><span class="gap"></span><span class="l">H</span><i class="d off"></i></div>
+        <div class="frame"><div class="sun"></div><div class="m1"></div><div class="m2"></div></div>
+        <div class="bar"><div class="play"></div><div class="track"><i></i></div><div class="t">1:12:40</div></div>
+      </div>
+    </div>
+    <div>
+      <div class="cap">Playing a game <small>two agents working</small></div>
+      <div class="screen game">
+        <div class="pill"><span class="l">C</span><i class="d y"></i><span class="gap"></span><span class="l">G</span><i class="d y"></i><span class="gap"></span><span class="l">H</span><i class="d off"></i></div>
+        <div class="orb"></div><div class="grid"></div><div class="ship"></div>
+        <div class="hud"><div class="hp"><i></i></div><div class="score">SCORE 048210</div></div>
+      </div>
+    </div>
+    <div>
+      <div class="cap">On the web <small>Claude needs you</small></div>
+      <div class="screen web">
+        <div class="pill"><span class="l">C</span><i class="d r"></i><i class="d g"></i><span class="gap"></span><span class="l">G</span><i class="d off"></i><span class="gap"></span><span class="l">H</span><i class="d g"></i></div>
+        <div class="tip">C1 Claude: <b>NEEDS YOU</b> - api-server (8s)<br>C2 Claude: done - website (3m)<br>H1 Hermes: done - notes (12m)</div>
+        <div class="chrome"><div class="tabs"><div class="tab on"></div><div class="tab"></div></div><div class="url">example.com/recipes</div></div>
+        <div class="page">
+          <div class="hero"></div>
+          <div class="lines"><i style="width:92%"></i><i style="width:80%"></i><i style="width:86%"></i><i style="width:58%"></i></div>
+          <div class="card"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer><span>Claude Code · Grok CLI · Hermes Agent &nbsp;·&nbsp; Windows pill, agents on Linux &nbsp;·&nbsp; MIT</span><span class="repo">github.com/Coinupbtc/agent-lights</span></footer>
+</body>
+</html>

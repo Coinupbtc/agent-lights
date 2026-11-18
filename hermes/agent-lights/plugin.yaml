@@ -1,0 +1,15 @@
+name: agent-lights
+version: 1.0.0
+kind: standalone
+description: >
+  Feeds the Hermes light on the Agent Lights pill. Writes one small JSON per chat session to
+  ~/.local/state/agent-lights/sessions/: working at turn start, done/error at turn end, needs-you while
+  a human prompt (approval, clarify, password) is open. Skips cron jobs and subagents. Registers no tools,
+  never blocks anything.
+author: coinupbtc
+provides_hooks:
+  - pre_llm_call
+  - pre_tool_call
+  - on_session_end
+  - on_human_input_request
+  - on_human_input_resolved
