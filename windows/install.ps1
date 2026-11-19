@@ -63,6 +63,7 @@ Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
 Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$dest\AgentLights.ps1`""
 Write-Host "[4/4] pill running (top-right): one dot per agent session in a terminal tab. Hover it to see which is which."
 Write-Host ""
-Write-Host "Click the pill = your terminal. Click again = tuck it away. Drag = move. Hover = which dot is which."
+Write-Host "Click the pill = your terminal on top; your game keeps the keyboard and its sound. Click into the terminal to type."
+Write-Host "Click the pill again = tuck it away (the keyboard goes back to your game). Drag = move. Hover = which dot is which."
 Write-Host "Right-click = each dot (C1, C2...) with Open (attach it in a new tab) or Close."
 Write-Host "Games: use borderless / windowed fullscreen. Nothing can draw over exclusive fullscreen."

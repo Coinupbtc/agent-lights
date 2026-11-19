@@ -28,12 +28,14 @@ alone is **C**; Claude, Codex and Cursor together are **CL**, **CX** and **CU**.
 | ◯ hollow colored ring | still running in tmux, but no window shows it (the tab closed or ssh dropped) |
 | red pill edge | can't reach the agent machine |
 
-- **Click** = show your terminal (a normal Windows Terminal window with tabs). Click again to tuck it away.
+- **Click** = show your terminal (a normal Windows Terminal window with tabs) on top, **without taking the
+  keyboard**: your game or movie keeps focus, so its sound keeps playing. Click into the terminal to type. Click the
+  pill again to tuck it away, and the keyboard goes back to your game.
 - **Hover** = which dot is which: `C1 Claude: NEEDS YOU - api-server (8s)`.
-- **Drag** = move it. It never steals focus from your game or video.
+- **Drag** = move it. The pill itself never takes focus from your game or video.
 - **Right-click** = a row per dot:
   - **Open**: attach that session in a new tab. A session in a plain tab can be moved: it's stopped there and resumed here.
-  - **Close**: end that agent, after a Yes/No.
+  - **Close**: end that agent, after a "Yes, end it" right there in the menu.
   - **Close all with no window**: clear the hollow rings.
   - **Reopen a closed session**: the last 10 from the past day. It runs the agent's own resume command
     (`claude --resume`, `codex resume`, `agent --resume`, ...) inside tmux.
@@ -75,6 +77,11 @@ powershell -ExecutionPolicy Bypass -File .\windows\install.ps1 -Server 192.168.1
 
 The pill appears top-right and starts with Windows. For games, use **borderless / windowed fullscreen**: nothing
 can draw over exclusive fullscreen.
+
+**Sound while you type:** many games go quiet when another window has the keyboard. The pill and a terminal you
+only look at leave your game's sound alone, but typing in the terminal takes the keyboard. To keep the sound then
+too, turn on the game's own background-sound option (World of Warcraft: Settings → Audio → **Sound in Background**,
+or type `/console Sound_EnableSoundWhenGameIsInBG 1` in chat).
 
 ### Optional: keep agents alive when ssh drops
 

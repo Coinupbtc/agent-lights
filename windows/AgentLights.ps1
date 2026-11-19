@@ -65,6 +65,11 @@ public class AgentLightsPill : Form {
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] static extern void SwitchToThisWindow(IntPtr h, bool altTab);
+    [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr h);
+    [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    static readonly IntPtr HWND_TOPMOST = new IntPtr(-1), HWND_NOTOPMOST = new IntPtr(-2), HWND_BOTTOM = new IntPtr(1);
+    const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOACTIVATE = 0x10, SWP_SHOWWINDOW = 0x40;
     delegate bool EnumProc(IntPtr h, IntPtr p);
     const string WtClass = "CASCADIA_HOSTING_WINDOW_CLASS";
     const string WinName = "AgentLights";   // our own named Windows Terminal window
@@ -82,6 +87,7 @@ public class AgentLightsPill : Form {
     System.Windows.Forms.Timer adoptTimer = new System.Windows.Forms.Timer();
     static Font labelFont = new Font("Segoe UI", 8f, FontStyle.Bold);
     IntPtr term = IntPtr.Zero;               // the terminal window this pill shows / hides
+    IntPtr app = IntPtr.Zero;                // the window you were in (game, movie...): it gets the keyboard back
     HashSet<IntPtr> before = new HashSet<IntPtr>();
     int adoptTicks;
 
@@ -353,14 +359,21 @@ public class AgentLightsPill : Form {
                 string openText = r.Target.Length == 0 ? "Move it here (stops it in its plain tab, resumes it in a new one)"
                                 : r.Window ? "Open here too (new tab)" : "Open in a new tab";
                 m.MenuItems.Add(new MenuItem(openText, delegate { OpenSession(r.Id, r.Label + " " + Short(r.Text)); }));
-                m.MenuItems.Add(new MenuItem("Close (ends this agent)", delegate { CloseSessions(new DotRow[] { r }); }));
+                // confirm inside the menu, not a dialog box: a menu doesn't take the keyboard from your game
+                MenuItem close = new MenuItem("Close (ends this agent)");
+                close.MenuItems.Add(new MenuItem("Yes, end it (the chat is saved: Reopen brings it back)",
+                    delegate { CloseSessions(new DotRow[] { r }); }));
+                m.MenuItems.Add(close);
                 cm.MenuItems.Add(m);
             }
             if (n == 0) { MenuItem m = new MenuItem("No agent sessions"); m.Enabled = false; cm.MenuItems.Add(m); }
             if (ghosts.Count > 0) {
                 DotRow[] g = ghosts.ToArray();
                 cm.MenuItems.Add(new MenuItem("-"));
-                cm.MenuItems.Add(new MenuItem("Close all with no window (" + g.Length + ")", delegate { CloseSessions(g); }));
+                MenuItem all2 = new MenuItem("Close all with no window (" + g.Length + ")");
+                all2.MenuItems.Add(new MenuItem(g.Length == 1 ? "Yes, end it (the chat is saved: Reopen brings it back)"
+                    : "Yes, end all " + g.Length + " (the chats are saved: Reopen brings them back)", delegate { CloseSessions(g); }));
+                cm.MenuItems.Add(all2);
             }
             string[][] closed = closedRows;
             if (closed.Length > 0) {
@@ -384,16 +397,18 @@ public class AgentLightsPill : Form {
     static string Short(string text) { return text.Split(new string[] { " - " }, StringSplitOptions.None)[0]; }
 
     void OpenSession(string id, string title) {
+        // you open a session to type in it, so this one does take the keyboard; tucking the terminal gives it back
+        Remember(GetForegroundWindow());
         if (sshHost.Length == 0) {
-            MessageBox.Show(this, "Set -SshHost first (what you type after ssh to reach the agent machine):\n" +
-                "run windows\\install.ps1 again with -SshHost you@host.", "Agent Lights");
+            Say("Set -SshHost first (what you type after ssh to reach the agent machine):\n" +
+                "run windows\\install.ps1 again with -SshHost you@host.");
             return;
         }
         // a new tab in our terminal window: ssh to the agent machine and run agent-lights-open there, which attaches the
         // session if it lives in tmux, or starts the agent again with its resume command
         if (!Regex.IsMatch(id, "^[A-Za-z0-9_.-]+$") || !Regex.IsMatch(sshHost, "^[A-Za-z0-9_.@-]+$")
             || !Regex.IsMatch(openCmd, "^[A-Za-z0-9_./~-]+$")) {
-            MessageBox.Show(this, "Can't open " + title + ": unexpected session id, ssh host or OpenCmd.", "Agent Lights");
+            Say("Can't open " + title + ": unexpected session id, ssh host or OpenCmd.");
             return;
         }
         try {
@@ -414,17 +429,12 @@ public class AgentLightsPill : Form {
                 Launch(args);
             }
         } catch (Exception e) {
-            MessageBox.Show(this, "Could not open " + title + ": " + e.Message, "Agent Lights");
+            Say("Could not open " + title + ": " + e.Message);
         }
     }
 
     void CloseSessions(DotRow[] list) {
-        StringBuilder q = new StringBuilder();
-        foreach (DotRow r in list) q.Append("\n   " + r.Label + "   " + r.Text);
-        string msg = (list.Length == 1 ? "Close this session?" : "Close these " + list.Length + " sessions?") + "\n" + q +
-                     "\n\nThis ends the agent" + (list.Length == 1 ? "" : "s") + "." +
-                     "\nThe chat is saved: right-click, Reopen a closed session brings it back.";
-        if (MessageBox.Show(this, msg, "Agent Lights", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        // already confirmed in the menu
         ThreadPool.QueueUserWorkItem(delegate {
             StringBuilder errs = new StringBuilder();
             foreach (DotRow r in list) {
@@ -433,7 +443,7 @@ public class AgentLightsPill : Form {
             }
             if (errs.Length > 0) {
                 string text = errs.ToString();
-                BeginInvoke((MethodInvoker)delegate { MessageBox.Show(this, "Could not close:\n" + text, "Agent Lights"); });
+                BeginInvoke((MethodInvoker)delegate { Say("Could not close:\n" + text); });
             }
         });
     }
@@ -480,20 +490,81 @@ public class AgentLightsPill : Form {
         return set;
     }
 
+    // Click = show the terminal on top WITHOUT taking the keyboard. Many games (and some players) mute or pause
+    // themselves the moment another window gets focus, so the window you were in keeps it, and keeps its sound.
+    // Click into the terminal to type. Click the pill again = tuck it away, and the keyboard goes back.
     void Toggle() {
         try {
+            IntPtr fg = GetForegroundWindow();
             if (term != IntPtr.Zero && IsWindow(term)) {
-                if (GetForegroundWindow() == term && !IsIconic(term)) ShowWindow(term, 6);  // SW_MINIMIZE
-                else Bring(term);
+                if (Showing(fg)) Tuck(fg); else Peek(fg);
             } else {
+                Remember(fg);
                 Launch("");
             }
         } catch (Exception e) {
-            MessageBox.Show("Could not open Windows Terminal: " + e.Message, "Agent Lights");
+            Say("Could not open Windows Terminal: " + e.Message);
         }
     }
 
+    void Remember(IntPtr fg) { if (fg != IntPtr.Zero && fg != term && fg != Handle) app = fg; }
+
+    bool Showing(IntPtr fg) {
+        if (IsIconic(term) || !IsWindowVisible(term)) return false;
+        return fg == IntPtr.Zero || fg == term || Above(term, fg);
+    }
+
+    static bool Above(IntPtr a, IntPtr b) {
+        // is window a higher up the z-order than window b?
+        IntPtr h = b;
+        for (int i = 0; i < 5000; i++) {
+            h = GetWindow(h, 3);   // GW_HWNDPREV: the window just above
+            if (h == IntPtr.Zero) return false;
+            if (h == a) return true;
+        }
+        return false;
+    }
+
+    void Peek(IntPtr fg) {
+        Remember(fg);
+        if (IsIconic(term)) ShowWindow(term, 4);   // SW_SHOWNOACTIVATE
+        // to the top of the normal windows (still under the pill), focus stays where it is
+        SetWindowPos(term, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        SetWindowPos(term, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+
+    void Tuck(IntPtr fg) {
+        bool typing = fg == term;
+        if (IsZoomed(term)) {
+            // a maximized window comes back un-maximized from a minimize without focus: send it behind everything
+            if (typing) GiveBack();
+            SetWindowPos(term, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            if (typing && GetForegroundWindow() == term) ShowWindow(term, 6);   // nothing to go back to: SW_MINIMIZE
+        } else if (typing) {
+            ShowWindow(term, 6);   // SW_MINIMIZE
+            GiveBack();
+        } else {
+            ShowWindow(term, 7);   // SW_SHOWMINNOACTIVE: your game keeps the keyboard
+        }
+    }
+
+    void GiveBack() { GiveBack(app); }
+    void GiveBack(IntPtr w) {
+        if (w == IntPtr.Zero || w == Handle || !IsWindow(w) || GetForegroundWindow() == w) return;
+        if (IsIconic(w)) ShowWindow(w, 9);   // SW_RESTORE (a game in exclusive fullscreen minimizes itself)
+        SetForegroundWindow(w);
+        if (GetForegroundWindow() != w) SwitchToThisWindow(w, true);
+    }
+
+    void Say(string text) {
+        // a message box takes the keyboard; hand it back to your game afterwards
+        IntPtr fg = GetForegroundWindow();
+        MessageBox.Show(this, text, "Agent Lights");
+        GiveBack(fg);
+    }
+
     void NewTab() {
+        Remember(GetForegroundWindow());
         try {
             if (term != IntPtr.Zero && IsWindow(term)) {
                 Process.Start("wt.exe", "-w " + WinName + " new-tab" + ProfileArg());
@@ -501,7 +572,7 @@ public class AgentLightsPill : Form {
                 Launch("");
             }
         } catch (Exception e) {
-            MessageBox.Show("Could not open Windows Terminal: " + e.Message, "Agent Lights");
+            Say("Could not open Windows Terminal: " + e.Message);
         }
     }
 
